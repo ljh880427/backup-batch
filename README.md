@@ -1,6 +1,6 @@
 ### 데이터 백업 및 이관 BATCH 테스트
 
-컨트롤러 / 서비스 / DAO / DTO / VO / Mapper를 전부 포함한 Spring Batch + MyBatis 기반 “두 원본 테이블 조인 → 단일 타깃 테이블로 이관 → 원본 데이터 삭제” 파이프라인 전체 예시를 제공합니다.
+- 컨트롤러 / 서비스 / DAO / DTO / VO / Mapper를 전부 포함한 Spring Batch + MyBatis 기반 “두 원본 테이블 조인 → 단일 타깃 테이블로 이관 → 원본 데이터 삭제” 파이프라인 전체 예시를 제공합니다.
 
 운영 전제: PostgreSQL, MyBatis, Spring Batch, 정해진 시간 자동 실행(@Scheduled) + 수동 트리거용 API 제공
 
