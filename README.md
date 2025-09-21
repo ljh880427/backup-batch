@@ -10,9 +10,9 @@
 
 - 대량 운영 대비: 청크 처리, 재실행 안전(idempotent), ON CONFLICT DO NOTHING 사용, 실패 시 재시작 가능하게 Step 분리
 
-# 0) 의존성 & 설정
+### 0) 의존성 & 설정
 
-# build.gradle
+### build.gradle
 ```````
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
