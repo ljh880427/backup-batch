@@ -473,11 +473,11 @@ public class MigrationDao extends EgovAbstractMapper {
 		resultType="kr.re.kice.adnp.cm.survey.dao.vo.migration.MigrationRowVo">
 		<![CDATA[
 		SELECT
-			a.a_id        AS a_id,
-			b.b_id        AS b_id,
-			a.biz_key     AS biz_key,
-			a.col_a       AS col_a,
-			b.col_b       AS col_b
+			a.a_id      AS aId,
+			b.b_id      AS bId,
+			a.biz_key   AS bizKey,
+			a.col_a     AS colA,
+			b.col_b     AS colB
 			-- 필요한 컬럼들 추가 시 여기에 alias 맞춰 추가
 		FROM test_ass_src_a a
 		JOIN test_ass_src_b b ON b.a_id = a.a_id
@@ -655,8 +655,11 @@ batch:
 ```````
 package kr.re.kice.adnp.cm.survey.controller;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
-import java.time.LocalDateTime;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -697,14 +700,23 @@ public class MigrationController {
 				schema = @Schema(implementation = CommonResponse.class)))
 	})
 	public ResponseEntity<CommonResponse<MigrationResultDto>> run(
-		@RequestParam(name = "cutoff", required = false) String cutoff
+		@RequestParam(name = "cutoff", required = false) String cutoff // yyyy-MM-dd 형식 권장
 	) throws Exception {
-		final String runId = "M" + LocalDateTime.now().toString()
-			.replace(":", "").replace("-", "").replace(".", "");
+		final ZoneId seoul = ZoneId.of("Asia/Seoul");
+
+		final String runId = "M" + ZonedDateTime.now(seoul)
+				.format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSS"));
+
+		// cutoff가 없으면 당일 00:00(서울), 있으면 yyyy-MM-dd를 당일 00:00으로 파싱
+		final LocalDate ld = (cutoff == null || cutoff.isBlank())
+				? LocalDate.now(seoul)
+				: LocalDate.parse(cutoff); // 형식 불일치시 400 처리 고려
+		final Date cutoffDate = Date.from(ld.atStartOfDay(seoul).toInstant());
+
 		final JobParameters params = new JobParametersBuilder()
 			.addString("runId", runId)
-			.addString("cutoff", (cutoff == null || cutoff.isBlank()) ? "2025-07-01" : cutoff)
-			.addDate("runAt", new Date())
+			.addDate("cutoff", cutoffDate) // ✅ Date로 전달
+			.addDate("runAt", Date.from(ZonedDateTime.now(seoul).toInstant()))
 			.toJobParameters();
 
 		final JobExecution exec = jobLauncher.run(migrationJob, params);
@@ -731,3 +743,90 @@ public class MigrationController {
 }
 ```````
 
+
+## 테스트 테이블, 컬럼, 데이터 생성
+```````
+
+
+-- 원본 A
+DROP TABLE IF EXISTS test_ass_src_a CASCADE;
+CREATE TABLE test_ass_src_a (
+	a_id				BIGSERIAL PRIMARY KEY,
+	biz_key				VARCHAR(50) NOT NULL,
+	col_a				VARCHAR(200) NOT NULL,
+	-- 업무 기준 시간(배치 컷오프/조인에 사용)
+	last_reg_dt			TIMESTAMP NOT NULL,
+	use_yn				CHAR(1) NOT NULL DEFAULT 'Y',
+	frst_rgtr_id		VARCHAR(50) NOT NULL DEFAULT 'tester',
+	frst_reg_dt			TIMESTAMP NOT NULL DEFAULT NOW(),
+	last_rgtr_id		VARCHAR(50) NOT NULL DEFAULT 'tester',
+	-- ✅ 감사(최종 수정) 시간: 이름을 last_upd_dt 로 분리
+	last_upd_dt			TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 원본 B (A의 자식)
+DROP TABLE IF EXISTS test_ass_src_b CASCADE;
+CREATE TABLE test_ass_src_b (
+	b_id				BIGSERIAL PRIMARY KEY,
+	a_id				BIGINT NOT NULL REFERENCES test_ass_src_a(a_id),
+	col_b				VARCHAR(200) NOT NULL,
+	-- 업무 기준 시간
+	last_reg_dt			TIMESTAMP NOT NULL,
+	use_yn				CHAR(1) NOT NULL DEFAULT 'Y',
+	frst_rgtr_id		VARCHAR(50) NOT NULL DEFAULT 'tester',
+	frst_reg_dt			TIMESTAMP NOT NULL DEFAULT NOW(),
+	last_rgtr_id		VARCHAR(50) NOT NULL DEFAULT 'tester',
+	-- ✅ 감사(최종 수정) 시간
+	last_upd_dt			TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 타깃(머지 결과)
+DROP TABLE IF EXISTS test_ass_merged_c CASCADE;
+CREATE TABLE test_ass_merged_c (
+	id					BIGSERIAL PRIMARY KEY,
+	biz_key				VARCHAR(50) NOT NULL,
+	col_a				VARCHAR(200) NOT NULL,
+	col_b				VARCHAR(200) NOT NULL,
+	a_id				BIGINT NOT NULL,
+	b_id				BIGINT NOT NULL,
+	merge_dt			TIMESTAMP NOT NULL DEFAULT NOW(),
+	use_yn				CHAR(1) NOT NULL DEFAULT 'Y',
+	UNIQUE (a_id, b_id)
+);
+
+-- 실행별 이관 로그
+DROP TABLE IF EXISTS test_ass_mig_log_t CASCADE;
+CREATE TABLE test_ass_mig_log_t (
+	run_id				VARCHAR(40) NOT NULL,
+	a_id				BIGINT NOT NULL,
+	b_id				BIGINT NOT NULL,
+	merged_id			BIGINT NULL,
+	reg_dt				TIMESTAMP NOT NULL DEFAULT NOW(),
+	UNIQUE (run_id, a_id, b_id)
+);
+
+-- 인덱스(조인/필터용)
+CREATE INDEX IF NOT EXISTS idx_test_src_a_lastreg ON test_ass_src_a(last_reg_dt);
+CREATE INDEX IF NOT EXISTS idx_test_src_b_aid ON test_ass_src_b(a_id);
+CREATE INDEX IF NOT EXISTS idx_test_src_b_lastreg ON test_ass_src_b(last_reg_dt);
+
+-- ========= 샘플데이터 =========
+-- A: 5건
+INSERT INTO test_ass_src_a (biz_key, col_a, last_reg_dt, use_yn) VALUES
+('K-1001', 'A-Row-1', '2025-05-10 10:00:00', 'Y'),
+('K-1002', 'A-Row-2', '2025-06-15 11:00:00', 'Y'),
+('K-1003', 'A-Row-3', '2025-07-20 09:00:00', 'Y'), -- 컷오프 이후
+('K-1004', 'A-Row-4', '2025-04-01 08:00:00', 'Y'),
+('K-1005', 'A-Row-5', '2025-03-05 07:00:00', 'N'); -- 비활성
+
+-- B: 6건 (A와 일부 매칭, 일부 최신/비활성)
+-- a_id는 위에서 생성된 순번을 가정: 1..5
+INSERT INTO test_ass_src_b (a_id, col_b, last_reg_dt, use_yn) VALUES
+(1, 'B-For-A1', '2025-05-11 12:00:00', 'Y'), -- A1과 join, 컷오프 이전
+(2, 'B-For-A2', '2025-06-16 12:00:00', 'Y'), -- A2와 join, 컷오프 이전
+(3, 'B-For-A3', '2025-08-01 12:00:00', 'Y'), -- A3와 join, 컷오프 이후(이관 제외)
+(4, 'B-For-A4', '2025-04-02 12:00:00', 'Y'), -- A4와 join, 컷오프 이전
+(4, 'B-For-A4-NEW', '2025-07-30 12:00:00', 'Y'), -- A4 최신(컷오프 이후) → GREATEST로 컷오프 넘음
+(5, 'B-For-A5', '2025-03-06 12:00:00', 'N'); -- 비활성(제외)
+
+```````
