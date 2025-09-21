@@ -542,6 +542,14 @@ public class MigrationDao extends EgovAbstractMapper {
 		]]>
 	</delete>
 
+	
+	<delete id="HousekeepLog">
+	  <![CDATA[
+	    DELETE FROM test_ass_mig_log_t
+	    WHERE reg_dt < NOW() - INTERVAL '30 days'
+	  ]]>
+	</delete>
+
 </mapper>
 ```````
 
