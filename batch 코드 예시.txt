@@ -1,0 +1,733 @@
+### AppConfig 클레스 설정 추가 ( @Configuration 클레스 아무데나 추가 가능)
+```````
+@Bean
+	public JobRegistry jobRegistry() {
+	    return new MapJobRegistry(); // ListableJobLocator 구현체
+	}
+
+	@Bean
+	public JobRegistryBeanPostProcessor jobRegistryBeanPostProcessor(JobRegistry jobRegistry) {
+	    JobRegistryBeanPostProcessor p = new JobRegistryBeanPostProcessor();
+	    p.setJobRegistry(jobRegistry);
+	    return p; // @Bean으로 등록된 모든 Job을 자동 등록
+	} 
+```````
+	
+
+### BatchInfraConfig 클레스 설정 추가
+```````
+package kr.re.kice.adnp.cm.config;
+
+import javax.sql.DataSource;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.explore.support.JobExplorerFactoryBean;
+import org.springframework.batch.core.launch.support.SimpleJobLauncher;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.repository.support.JobRepositoryFactoryBean;
+
+@Configuration
+@RequiredArgsConstructor
+public class BatchInfraConfig {
+
+	@Bean
+	public JobRepository jobRepository(
+		DataSource dataSource,
+		@Qualifier("transactionManager") PlatformTransactionManager txManager
+	) throws Exception {
+		final JobRepositoryFactoryBean f = new JobRepositoryFactoryBean();
+		f.setDataSource(dataSource);
+		f.setTransactionManager(txManager);
+		// 필요 시 설정 조정
+		// f.setIsolationLevelForCreate("ISOLATION_READ_COMMITTED");
+		f.afterPropertiesSet();
+		return f.getObject();
+	}
+
+	@Bean
+	public JobExplorer jobExplorer(DataSource dataSource) throws Exception {
+		final JobExplorerFactoryBean f = new JobExplorerFactoryBean();
+		f.setDataSource(dataSource);
+		f.afterPropertiesSet();
+		return f.getObject();
+	}
+
+	@Bean
+	public JobLauncher jobLauncher(JobRepository jobRepository) throws Exception {
+		final SimpleJobLauncher l = new SimpleJobLauncher();
+		l.setJobRepository(jobRepository);
+		l.afterPropertiesSet();
+		return l;
+	}
+
+	// Batch 4.x용 팩토리 직접 제공 (EnableBatchProcessing 미사용)
+	@Bean
+	public JobBuilderFactory jobBuilderFactory(JobRepository jobRepository) {
+		return new JobBuilderFactory(jobRepository);
+	}
+
+	@Bean
+	public StepBuilderFactory stepBuilderFactory(
+		JobRepository jobRepository,
+		@Qualifier("transactionManager") PlatformTransactionManager txManager
+	) {
+		return new StepBuilderFactory(jobRepository, txManager);
+	}
+}
+```````
+
+### BatchScopesConfig 클레스 설정 추가
+```````
+package kr.re.kice.adnp.cm.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class BatchScopesConfig {
+    @Bean public static org.springframework.batch.core.scope.StepScope stepScope() { return new org.springframework.batch.core.scope.StepScope(); }
+    @Bean public static org.springframework.batch.core.scope.JobScope jobScope() { return new org.springframework.batch.core.scope.JobScope(); }
+}
+```````
+
+### MigrationJobConfig 클레스파일 설정 추가
+```````
+package kr.re.kice.adnp.cm.config;
+
+import java.sql.Timestamp;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.mybatis.spring.batch.MyBatisBatchItemWriter;
+import org.mybatis.spring.batch.MyBatisCursorItemReader;
+
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.Step;
+import org.springframework.batch.core.StepExecutionListener;
+import org.springframework.batch.core.ExitStatus;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.JobExecutionListener;
+import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
+import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepScope;
+import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemWriter;
+import org.springframework.batch.repeat.RepeatStatus;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import kr.re.kice.adnp.cm.survey.dao.vo.migration.MigrationRowVo;
+
+@Slf4j
+@Configuration
+@RequiredArgsConstructor
+public class MigrationJobConfig {
+
+	private final JobBuilderFactory jobBuilderFactory;
+	private final StepBuilderFactory stepBuilderFactory;
+	private final SqlSessionFactory sqlSessionFactory;
+
+	@Bean
+	public Job migrationJob() {
+		return jobBuilderFactory.get("migrationJob")
+			.start(stepMigrateInsert())
+			.next(stepVerify())
+			.next(stepDeleteB())
+			.next(stepDeleteA())
+			.listener(jobListener())
+			.build();
+	}
+
+	@Bean
+	public JobExecutionListener jobListener() {
+		return new JobExecutionListener() {
+			@Override
+			public void beforeJob(JobExecution jobExecution) {
+				final String runId = jobExecution.getJobParameters().getString("runId");
+				final Date cutoff = jobExecution.getJobParameters().getDate("cutoff");
+				log.info("Migration start. runId={}, cutoff={}", runId, cutoff);
+			}
+			@Override
+			public void afterJob(JobExecution jobExecution) {
+				log.info("Migration end. status={}", jobExecution.getStatus());
+			}
+		};
+	}
+
+	@Bean
+	public Step stepMigrateInsert() {
+		return stepBuilderFactory.get("stepMigrateInsert")
+			.<MigrationRowVo, MigrationRowVo>chunk(chunkSize())
+			.reader(joinReader(null))
+			.processor(passThroughProcessor())
+			.writer(insertAndLogWriter(null))
+			.listener(stepListener("stepMigrateInsert"))
+			.build();
+	}
+
+	@StepScope
+	@Bean
+	public MyBatisCursorItemReader<MigrationRowVo> joinReader(
+		@Value("#{jobParameters['cutoff']}") Date cutoff // ✅ Date로 주입
+	) {
+		final MyBatisCursorItemReader<MigrationRowVo> r = new MyBatisCursorItemReader<>();
+		r.setSqlSessionFactory(sqlSessionFactory);
+		r.setQueryId("migration.biz.SelectJoinForMigration");
+		final Map<String, Object> p = new HashMap<>();
+		// ✅ 그대로 TIMESTAMP로 전달 (파싱 금지)
+		p.put("cutoff", new Timestamp(cutoff.getTime()));
+		r.setParameterValues(p);
+		return r;
+	}
+
+	@StepScope
+	@Bean
+	public ItemProcessor<MigrationRowVo, MigrationRowVo> passThroughProcessor() {
+		return item -> item;
+	}
+
+	@StepScope
+	@Bean
+	public ItemWriter<MigrationRowVo> insertAndLogWriter(
+		@Value("#{jobParameters['runId']}") String runId
+	) {
+		final MyBatisBatchItemWriter<MigrationRowVo> insertWriter = new MyBatisBatchItemWriter<>();
+		insertWriter.setSqlSessionFactory(sqlSessionFactory);
+		insertWriter.setStatementId("migration.biz.InsertIntoTarget");
+
+		return items -> {
+			insertWriter.write(items);
+			try (final var session = sqlSessionFactory.openSession(false)) {
+				for (final var it : items) {
+					final Map<String, Object> p = new HashMap<>();
+					p.put("runId", runId);
+					p.put("aId", it.getAId());
+					p.put("bId", it.getBId());
+					session.insert("migration.biz.InsertMigLog", p);
+				}
+				session.commit();
+			}
+		};
+	}
+	
+	@Bean
+	public Step stepVerify() {
+		return stepBuilderFactory.get("stepVerify")
+			.tasklet((contribution, ctx) -> {
+				final String runId = (String) ctx.getStepContext().getJobParameters().get("runId");
+				try (final var session = sqlSessionFactory.openSession(true)) {
+					final Long logCnt = session.selectOne("migration.biz.VerifyCounts", java.util.Map.of("runId", runId));
+					if (logCnt == null || logCnt <= 0L) {
+						throw new IllegalStateException("No migrated logs for runId=" + runId);
+					}
+				}
+				return RepeatStatus.FINISHED;
+			})
+			.listener(stepListener("stepVerify"))
+			.build();
+	}
+
+	@Bean
+	public Step stepDeleteB() {
+		return stepBuilderFactory.get("stepDeleteB")
+			.tasklet((contribution, ctx) -> {
+				final String runId = (String) ctx.getStepContext().getJobParameters().get("runId");
+				try (final var session = sqlSessionFactory.openSession(true)) {
+					final int del = session.delete("migration.biz.DeleteFromB", java.util.Map.of("runId", runId));
+					ctx.getStepContext().getStepExecution().getExecutionContext().putInt("deletedB", del);
+				}
+				return RepeatStatus.FINISHED;
+			})
+			.listener(stepListener("stepDeleteB"))
+			.build();
+	}
+
+	@Bean
+	public Step stepDeleteA() {
+		return stepBuilderFactory.get("stepDeleteA")
+			.tasklet((contribution, ctx) -> {
+				final String runId = (String) ctx.getStepContext().getJobParameters().get("runId");
+				try (final var session = sqlSessionFactory.openSession(true)) {
+					final int del = session.delete("migration.biz.DeleteFromA", java.util.Map.of("runId", runId));
+					ctx.getStepContext().getStepExecution().getExecutionContext().putInt("deletedA", del);
+				}
+				return RepeatStatus.FINISHED;
+			})
+			.listener(stepListener("stepDeleteA"))
+			.build();
+	}
+
+	private int chunkSize() {
+		return Integer.parseInt(System.getProperty("batch.migration.chunk", "1000"));
+	}
+
+	private StepExecutionListener stepListener(String name) {
+		return new StepExecutionListener() {
+			@Override
+			public void beforeStep(org.springframework.batch.core.StepExecution stepExecution) {
+				log.info("{} start", name);
+			}
+			@Override
+			public ExitStatus afterStep(org.springframework.batch.core.StepExecution stepExecution) {
+				log.info("{} end. read={}, write={}", name, stepExecution.getReadCount(), stepExecution.getWriteCount());
+				return ExitStatus.COMPLETED;
+			}
+		};
+	}
+}
+```````
+
+### MigrationJobScheduler 클레스 설정 추가
+package kr.re.kice.adnp.cm.config;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.JobParameters;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.launch.JobLauncher;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@EnableScheduling
+@RequiredArgsConstructor
+public class MigrationJobScheduler {
+
+	private final JobLauncher jobLauncher;
+	private final Job migrationJob;
+
+	@Value("${batch.migration.cron}")
+	private String cron;
+
+	@Scheduled(cron = "${batch.migration.cron}", zone = "Asia/Seoul")
+	public void run() throws Exception {
+		final ZoneId seoul = ZoneId.of("Asia/Seoul");
+
+		// 실행 ID (서울 시간 기준)
+		final String runId = "M" + ZonedDateTime.now(seoul)
+				.format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSS"));
+
+		// 당일 00:00 (서울) 컷오프
+		final LocalDateTime cutoffLdt = LocalDate.now(seoul).atStartOfDay();
+		final Date cutoff = Date.from(cutoffLdt.atZone(seoul).toInstant());
+
+		// JobParameters에 Date 타입으로 전달 -> 매퍼 #{cutoff, jdbcType=TIMESTAMP}와 매핑
+		final JobParameters params = new JobParametersBuilder()
+				.addString("runId", runId)
+				.addDate("cutoff", cutoff)
+				.addDate("runAt", Date.from(ZonedDateTime.now(seoul).toInstant()))
+				.toJobParameters();
+
+		jobLauncher.run(migrationJob, params);
+	}
+}
+```````
+
+### VO 에 kr.re.kice.adnp.cm.survey.dao.vo.migration 패키지 추가 
+### MigrationRowVo 클레스 파일 추가
+```````
+package kr.re.kice.adnp.cm.survey.dao.vo.migration;
+
+import java.time.LocalDateTime;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class MigrationRowVo {
+	private Long aId;
+	private Long bId;
+	private String bizKey;
+	private String colA;
+	private String colB;
+	private LocalDateTime lastRegDt;
+}
+```````
+
+### DTO에 kr.re.kice.adnp.cm.survey.dto.migration 패키지 추가 
+### MigrationResultDto 클레스 파일 추가
+```````
+package kr.re.kice.adnp.cm.survey.dto.migration;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
+@Getter
+@AllArgsConstructor
+@Schema(description = "이관 작업 결과")
+public class MigrationResultDto {
+	private String runId;
+	private long migratedCount;
+	private long deletedCount;
+}
+```````
+
+
+### MigrationDao DAO 파일 추가 
+```````
+package kr.re.kice.adnp.cm.survey.dao;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.egovframe.rte.psl.dataaccess.EgovAbstractMapper;
+import org.springframework.stereotype.Repository;
+
+import kr.re.kice.adnp.cm.survey.dao.vo.migration.MigrationRowVo;
+
+@Repository
+public class MigrationDao extends EgovAbstractMapper {
+
+	static final String MigrationSpace = "migration.biz.";
+
+	public List<MigrationRowVo> selectForMigration(LocalDateTime cutoff) {
+		final Map<String, Object> p = new HashMap<>();
+		p.put("cutoff", cutoff);
+		return selectList(MigrationSpace + "SelectJoinForMigration", p);
+	}
+
+	public int insertIntoTarget(MigrationRowVo vo) {
+		final Object r = insert(MigrationSpace + "InsertIntoTarget", vo);
+		return (r instanceof Integer) ? (Integer) r : 1;
+	}
+
+	public int insertMigLog(String runId, Long aId, Long bId) {
+		final Map<String, Object> p = new HashMap<>();
+		p.put("runId", runId);
+		p.put("aId", aId);
+		p.put("bId", bId);
+		final Object r = insert(MigrationSpace + "InsertMigLog", p);
+		return (r instanceof Integer) ? (Integer) r : 1;
+	}
+
+	public long verifyLogCount(String runId) {
+		final Map<String, Object> p = new HashMap<>();
+		p.put("runId", runId);
+		final Long n = selectOne(MigrationSpace + "VerifyCounts", p);
+		return (n != null) ? n.longValue() : 0L;
+	}
+
+	public int deleteFromB(String runId) {
+		final Map<String, Object> p = new HashMap<>();
+		p.put("runId", runId);
+		return delete(MigrationSpace + "DeleteFromB", p);
+	}
+
+	public int deleteFromA(String runId) {
+		final Map<String, Object> p = new HashMap<>();
+		p.put("runId", runId);
+		return delete(MigrationSpace + "DeleteFromA", p);
+	}
+
+	public int housekeepLog() {
+		return delete(MigrationSpace + "HousekeepLog");
+	}
+}
+```````
+
+### migration.xml 파일 추가
+```````
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+	PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+	"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="migration.biz">
+
+	<!-- 이 리더가 사용하는 SELECT -->
+	<select id="SelectJoinForMigration"
+		parameterType="map"
+		resultType="kr.re.kice.adnp.cm.survey.dao.vo.migration.MigrationRowVo">
+		<![CDATA[
+		SELECT
+			a.a_id        AS a_id,
+			b.b_id        AS b_id,
+			a.biz_key     AS biz_key,
+			a.col_a       AS col_a,
+			b.col_b       AS col_b
+			-- 필요한 컬럼들 추가 시 여기에 alias 맞춰 추가
+		FROM test_ass_src_a a
+		JOIN test_ass_src_b b ON b.a_id = a.a_id
+		WHERE a.use_yn = 'Y'
+		  AND b.use_yn = 'Y'
+		  -- 컷오프: A/B 중 더 최신(last_reg_dt)이 기준 이전이어야 함
+		  AND GREATEST(a.last_reg_dt, b.last_reg_dt) < #{cutoff, jdbcType=TIMESTAMP}
+		ORDER BY a.a_id, b.b_id
+		]]>
+	</select>
+
+	<!-- writer가 실행하는 타깃 INSERT (items의 프로퍼티로 바인딩) -->
+	<insert id="InsertIntoTarget"
+		parameterType="kr.re.kice.adnp.cm.survey.dao.vo.migration.MigrationRowVo">
+		<![CDATA[
+		INSERT INTO test_ass_merged_c
+		( biz_key, col_a, col_b, a_id, b_id )
+		VALUES
+		( #{bizKey}, #{colA}, #{colB}, #{aId}, #{bId} )
+		]]>
+	</insert>
+
+	<!-- 로그 적재 (session.insert("migration.biz.InsertMigLog", map)) -->
+	<insert id="InsertMigLog" parameterType="map">
+		<![CDATA[
+		INSERT INTO test_ass_mig_log_t
+		( run_id, a_id, b_id, merged_id, reg_dt )
+		VALUES
+		( #{runId}, #{aId}, #{bId}, #{mergedId, jdbcType=BIGINT}, NOW() )
+		]]>
+	</insert>
+
+	<!-- 검증 (selectOne -> Long 리턴) -->
+	<select id="VerifyCounts" parameterType="map" resultType="long">
+		<![CDATA[
+		SELECT COUNT(1)
+		FROM test_ass_mig_log_t
+		WHERE run_id = #{runId}
+		]]>
+	</select>
+
+	<!-- 원본/보조 테이블 삭제 (delete 반환값은 영향 행 수) -->
+	<delete id="DeleteFromB" parameterType="map">
+		<![CDATA[
+		DELETE FROM test_ass_src_b
+		WHERE b_id IN (
+			SELECT b_id
+			FROM test_ass_mig_log_t
+			WHERE run_id = #{runId}
+		)
+		]]>
+	</delete>
+
+	<delete id="DeleteFromA" parameterType="map">
+		<![CDATA[
+		DELETE FROM test_ass_src_a
+		WHERE a_id IN (
+			SELECT a_id
+			FROM test_ass_mig_log_t
+			WHERE run_id = #{runId}
+		)
+		]]>
+	</delete>
+
+</mapper>
+```````
+
+### application.yml 파일에 설정 추가
+```````
+
+	batch: # 배치추가
+		job:
+		  enabled: false           # 애플리케이션 기동시 동작하지 않고 배치 Job cron 시작에 동작하도록 설정
+		jdbc:
+		  initialize-schema: always  # 로컬에서 메타테이블 자동 생성(BATCH_*)
+	  
+
+	org.springframework.batch: INFO # 배치추가
+    org.mybatis: INFO # 배치추가
+	
+# ▼ 추가: 이관 배치 파라미터(스케줄/기준일/청크/그리드 크기)
+batch:
+  migration:
+    cron: "0 02 20 * * *"   # 매일 19:39 (Asia/Seoul)
+    # cutoff는 코드에서 계산하므로 생략하거나 주석 처리
+    #cutoff: "2025-07-01"
+    chunk-size: 1000
+    grid-size: 1
+
+
+
+아래 코드 위치에 위 설정 추가
+
+server:
+  port: 8915
+
+spring:
+  application:
+    name: adnp-cm-ss
+  servlet:
+    multipart:
+        max-file-size: 20MB
+        max-request-size: 20MB
+  profiles:
+    default: local
+  config:
+    import:
+      - classpath:/yaml/adnp-default.yml
+      - classpath:/yaml/adnp-security.yml
+      - classpath:/yaml/adnp-feign.yml
+      - classpath:/yaml/adnp-swagger.yml
+  batch: # 배치추가
+    job:
+      enabled: false           # 애플리케이션 기동시 동작하지 않고 배치 Job cron 시작에 동작하도록 설정
+    jdbc:
+      initialize-schema: always  # 로컬에서 메타테이블 자동 생성(BATCH_*)
+
+  mvc:
+    servlet:
+      path: /
+  cache: # local cache
+    specs:
+      sample: maximumSize=500,expireAfterWrite=5m
+      users: maximumSize=1000,expireAfterWrite=10m
+      default: maximumSize=100,expireAfterWrite=1m
+  redis:
+    specs:
+      default: 30m  # 기본 만료 시간 (TTL).
+      sample: 10m
+      users: 1h  # 'users' 캐시는 1시간으로 설정
+
+info:
+  app:
+    name: '@project.name@' # build.gradle의 <name> 값
+    description: '@project.description@' # build.gradle의 <description> 값
+    version: '@project.version@' # build.gradle의 <version> 값
+    build-timestamp: '@maven.build.timestamp@'
+  contact:
+    name: "Dev Team"
+    email: "dev@example.com"
+
+logging:
+  level:
+    org.springframework.boot.autoconfigure: WARN
+    # ▼ 추가: 배치/로깅
+    org.springframework.batch: INFO # 배치추가
+    org.mybatis: INFO # 배치추가
+    
+    
+# ▼ 추가: 이관 배치 파라미터(스케줄/기준일/청크/그리드 크기)
+batch:
+  migration:
+    cron: "0 02 20 * * *"   # 매일 19:39 (Asia/Seoul)
+    # cutoff는 코드에서 계산하므로 생략하거나 주석 처리
+    #cutoff: "2025-07-01"
+    chunk-size: 1000
+    grid-size: 1
+
+
+```````
+
+### build.gradle 파일에 설정 추가
+```````
+// Spring Batch 코어 (Boot 2.7.x ↔ Batch 4.3.x)
+	implementation 'org.springframework.boot:spring-boot-starter-batch'
+
+	// 배치에서 MyBatis Reader/Writer 사용할 때만 필요 (사용 중이면 유지)
+	implementation 'org.mybatis.spring.batch:mybatis-spring-batch:2.0.1'
+```````
+
+
+
+## 아래는 수동 배치 API 코드 예시
+### Controller 
+```````
+package kr.re.kice.adnp.cm.survey.controller;
+
+import java.util.Date;
+import java.time.LocalDateTime;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.JobParameters;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.StepExecution;
+import org.springframework.batch.core.launch.JobLauncher;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import kr.re.kice.adnp.cm.common.CommonResponse;
+import kr.re.kice.adnp.cm.survey.dto.migration.MigrationResultDto;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v3/ss")
+@RequiredArgsConstructor
+public class MigrationController {
+
+	private final JobLauncher jobLauncher;
+	private final Job migrationJob;
+
+	@PostMapping("/migrate/run")
+	@Operation(summary = "이관 배치 수동 실행", description = "두 원본을 조인하여 타깃으로 이관 후 원본을 삭제합니다.")
+	@ApiResponses({
+		@ApiResponse(responseCode = "200", description = "성공",
+			content = @Content(mediaType = "application/json",
+				schema = @Schema(implementation = CommonResponse.class)))
+	})
+	public ResponseEntity<CommonResponse<MigrationResultDto>> run(
+		@RequestParam(name = "cutoff", required = false) String cutoff
+	) throws Exception {
+		final String runId = "M" + LocalDateTime.now().toString()
+			.replace(":", "").replace("-", "").replace(".", "");
+		final JobParameters params = new JobParametersBuilder()
+			.addString("runId", runId)
+			.addString("cutoff", (cutoff == null || cutoff.isBlank()) ? "2025-07-01" : cutoff)
+			.addDate("runAt", new Date())
+			.toJobParameters();
+
+		final JobExecution exec = jobLauncher.run(migrationJob, params);
+
+		final long migrated = exec.getStepExecutions().stream()
+			.filter(s -> s.getStepName().equals("stepMigrateInsert"))
+			.mapToLong(StepExecution::getWriteCount)
+			.sum();
+
+		final long deleted = exec.getStepExecutions().stream()
+			.filter(s -> s.getStepName().startsWith("stepDelete"))
+			.mapToLong(s -> s.getExecutionContext().containsKey("deletedA")
+				? s.getExecutionContext().getInt("deletedA")
+				: (s.getExecutionContext().containsKey("deletedB")
+					? s.getExecutionContext().getInt("deletedB")
+					: 0))
+			.sum();
+
+		return CommonResponse.okEntity(
+				new MigrationResultDto(runId, migrated, deleted),
+				"이관 배치 실행 성공"
+			);
+	}
+}
+```````
+
