@@ -26,7 +26,7 @@ dependencies {
 ```````
 
 
-application.yml
+### application.yml
 ```````
 spring:
   jackson:
@@ -45,22 +45,22 @@ batch:
 # DB, mybatis 등은 환경에 맞게 설정
 ```````
 
-1) 테이블 가정(예시)
+### 1) 테이블 가정(예시)
 
-원본 A: ass_src_a(a_id PK, key, col_a, last_reg_dt, use_yn)
+- 원본 A: ass_src_a(a_id PK, key, col_a, last_reg_dt, use_yn)
 
-원본 B: ass_src_b(b_id PK, a_id FK, col_b, last_reg_dt, use_yn)
+- 원본 B: ass_src_b(b_id PK, a_id FK, col_b, last_reg_dt, use_yn)
 
-타깃: ass_merged_c(id PK, key, col_a, col_b, a_id, b_id, merge_dt, use_yn)
+- 타깃: ass_merged_c(id PK, key, col_a, col_b, a_id, b_id, merge_dt, use_yn)
 
-이관 로그(스테이징): ass_mig_log_t(run_id, a_id, b_id, merged_id, reg_dt) ← 당일/실행별 삭제 대상 보존
+- 이관 로그(스테이징): ass_mig_log_t(run_id, a_id, b_id, merged_id, reg_dt) ← 당일/실행별 삭제 대상 보존
 
 실제 컬럼명은 운영 DB에 맞춰 바꾸세요. 아래 Mapper의 SQL만 교체하면 됩니다.
 
 
 
-2) DTO / VO
-MigrationRowVo (조인 결과 → 타깃으로 이관될 1건)
+### 2) DTO / VO
+### MigrationRowVo (조인 결과 → 타깃으로 이관될 1건)
 ```````
 package kr.re.kice.adnp.cm.survey.dao.vo.migration;
 
@@ -80,7 +80,7 @@ public class MigrationRowVo {
 }
 ```````
 
-MigrationResultDto (컨트롤러 응답용)
+### MigrationResultDto (컨트롤러 응답용)
 ```````
 package kr.re.kice.adnp.cm.survey.dto.migration;
 
@@ -103,21 +103,21 @@ public class MigrationResultDto {
 }
 ```````
 
-3) Mapper(XML)
+### 3) Mapper(XML)
 
-네임스페이스: migration.biz
+- 네임스페이스: migration.biz
 
-SelectJoinForMigration: 컷오프 이전 + 사용중(Y)만 조인해서 대상 선별
+- SelectJoinForMigration: 컷오프 이전 + 사용중(Y)만 조인해서 대상 선별
 
-InsertIntoTarget: 타깃 테이블 UPSERT(충돌 시 무시)
+- InsertIntoTarget: 타깃 테이블 UPSERT(충돌 시 무시)
 
-InsertMigLog: 이관한 A/B 키를 실행별(runId)로 로그 저장
+- InsertMigLog: 이관한 A/B 키를 실행별(runId)로 로그 저장
 
-VerifyCounts: 타깃과 로그 건수 비교
+- VerifyCounts: 타깃과 로그 건수 비교
 
-DeleteFromB/FromA: 로그에 기록된 키 기준으로 원본 삭제(자식→부모 순)
+- DeleteFromB/FromA: 로그에 기록된 키 기준으로 원본 삭제(자식→부모 순)
 
-HousekeepLog: 오래된 로그 정리(옵션)
+- HousekeepLog: 오래된 로그 정리(옵션)
 
 ```````
 <?xml version="1.0" encoding="UTF-8"?>
@@ -211,8 +211,7 @@ HousekeepLog: 오래된 로그 정리(옵션)
 
 ```````
 
-
-4) DAO
+### 4) DAO
 ```````
 package kr.re.kice.adnp.cm.survey.dao;
 
@@ -274,7 +273,7 @@ public class MigrationDao {
 }
 ```````
 
-5) Batch 구성 (MyBatisPagingItemReader + MyBatisBatchItemWriter)
+### 5) Batch 구성 (MyBatisPagingItemReader + MyBatisBatchItemWriter)
 ```````
 package kr.re.kice.adnp.cm.survey.batch.migration;
 
@@ -480,9 +479,8 @@ public class MigrationJobConfig {
 }
 ```````
 
-
-6) 스케줄러(@Scheduled) + 수동 트리거 컨트롤러
-스케줄러
+### 6) 스케줄러(@Scheduled) + 수동 트리거 컨트롤러
+### 스케줄러
 ```````
 package kr.re.kice.adnp.cm.survey.batch.migration;
 
@@ -530,7 +528,7 @@ public class MigrationJobScheduler {
 }
 ```````
 
-컨트롤러(수동 실행 API + Swagger)
+### 컨트롤러(수동 실행 API + Swagger)
 ```````
 package kr.re.kice.adnp.cm.survey.api;
 
@@ -603,7 +601,7 @@ public class MigrationController {
 }
 ```````
 
-7) 서비스(선택) / 공통 응답 포맷
+### 7) 서비스(선택) / 공통 응답 포맷
 위 컨트롤러는 바로 CommonResponse를 사용했습니다. 만약 서비스 레이어를 선호하시면 아래처럼 래핑하세요.
 ```````
 package kr.re.kice.adnp.cm.survey.service;
@@ -667,5 +665,17 @@ public class MigrationServiceImpl implements MigrationService {
 }
 ```````
 
+### 8) 운영 체크리스트
+- 락/성능: 조인 조회는 인덱스(예: ass_src_b(a_id), ass_src_a(last_reg_dt)) 필수. 청크 사이즈/페치 사이즈 조정.
 
+- 무결성: 타깃 UPSERT 후 이관 로그 기록 → 로그 기준으로 원본 삭제(자식→부모).
 
+- 재실행 안전: UPSERT + 같은 runId는 중복 로그 insert 피하기 원하면 (run_id, a_id, b_id) 유니크키 권장.
+
+- 검증 강화: 필요 시 샘플 해시, 타깃/로그 건수 비교, 랜덤 샘플 비교 등 추가.
+
+- 후처리: 대량 삭제 후 ANALYZE, 파티션 환경이면 파티션 교체가 더 빠를 수 있음.
+
+- 권한: 배치 계정에 타깃 INSERT, 원본 DELETE, 로그 테이블 INSERT 권한 부여.
+
+필요하시면 실제 컬럼명으로 Mapper SQL을 바로 맞춰 드리고, 파티셔닝/병렬(Partitioner), Quartz 스케줄러 버전, 다단계 검증(COUNT 매칭 + 샘플 해시) 강화 템플릿도 탭 들여쓰기 그대로 만들어 드릴게요.
