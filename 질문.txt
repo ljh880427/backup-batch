@@ -1,0 +1,429 @@
+```````
+/**
+	 * [GET] /api/v3/ss/surveyTemplatesList  템플릿전체조회
+	 *
+	 * @param page the 페이지 정보
+	 * @param size the 표시 수
+	 * @param srvyTrprSeCd the 대상구분코드
+	 * @param tmpltTtl the 서식제목
+	 * @return ResponseEntity<CommonResponse<List<TemplateListDto>>> the 전체리스트,페이지정보
+	 */
+	@GetMapping("/surveyTemplatesList")
+	@Operation(summary = "템플릿 목록 조회", description = "등록한 템플릿 목록을 조회합니다.")
+	@ApiResponses(
+		value = {
+			@ApiResponse(
+				responseCode = "200",
+				description = "템플릿 목록 조회 성공",
+					content = @Content(
+						mediaType = "application/json",
+						schema = @Schema(implementation = CommonResponse.class),
+						schemaProperties = {
+							@SchemaProperty(
+								name = "data",
+								schema = @Schema(implementation = TemplateListDto.class)
+								)
+						}
+					)
+				),
+			@ApiResponse(responseCode = "500", description = "서버 오류")
+		}
+	)
+	public ResponseEntity<CommonResponse<List<TemplateListDto>>> templatesList(
+		@Parameter(description = "페이지번호", example = "1")
+		@RequestParam(name = "page", defaultValue = "1") int page,
+		@Parameter(description = "표시 수", example = "5")
+		@RequestParam(name = "size", defaultValue = "5") int size,
+		@Parameter(description = "대상구분코드", example = "01")
+		@RequestParam(name = "srvyTrprSeCd", required = false) String srvyTrprSeCd,
+		@Parameter(description = "서식제목", example = " ")
+		@RequestParam(name = "tmpltTtl", required = false) String tmpltTtl
+	) {
+		return surveyTemplatesService.templatesList(page, size, srvyTrprSeCd, tmpltTtl);
+	}
+
+
+package kr.re.kice.adnp.cm.survey.dto.surveytemplate;
+
+import java.time.LocalDateTime;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateRegVo;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Schema(description = "템플릿 목록 응답, CommonResponse.data 형태")
+public class TemplateListDto {
+
+	@Schema(description = "서식고유번호", example = " ")
+	private String tmpltUnqNo;
+
+	@Schema(description = "시스템구분코드", example = "ss")
+	private String sysSeCd;
+
+	@Schema(description = "대상구분코드", example = "01")
+	private String srvyTrprSeCd;
+
+	@Schema(description = "유형코드", example = "01")
+	private String typeSeUnqNo;
+
+	@Schema(description = "서식 제목", example = "피드백")
+	private String tmpltTtl;
+
+	@Schema(description = "서식 설명", example = "템플릿에 대한 간단한 설명")
+	private String tmpltExpln;
+
+	//@Schema(description = "서식 경로", example = "등록된 jsp 파일 경로?")
+	//private String tmpltPathNm;
+
+	@Schema(description = "최초 등록자 아이디", example = "최초 등록자 id")
+	private String frstRgtrId;
+
+	@Schema(description = "최초 등록 일시", example = "최초 등록한 시간")
+	private LocalDateTime frstRegDt;
+
+	@Schema(description = "최종 등록자 아이디", example = "최종 등록한 시간")
+	private String lastRgtrId;
+
+	@Schema(description = "최종 등록 일시", example = "최종 등록한 일시")
+	private LocalDateTime lastRegDt;
+
+	public TemplateListDto(TemplateRegVo tRegVo) {
+		this.tmpltUnqNo = tRegVo.getTmpltUnqNo();
+		this.sysSeCd = tRegVo.getSysSeCd();
+		this.srvyTrprSeCd = tRegVo.getSrvyTrprSeCd();
+		this.typeSeUnqNo = tRegVo.getTypeSeUnqNo();
+		this.tmpltTtl = tRegVo.getTmpltTtl();
+		//this.tmplt_img_cn = tRegVo.gettmplt_img_cn();
+		this.tmpltExpln = tRegVo.getTmpltExpln();
+		//this.tmpltPathNm = tRegVo.getTmpltPathNm();
+		this.frstRgtrId = tRegVo.getFrstRgtrId();
+		this.frstRegDt = tRegVo.getFrstRegDt();
+		this.lastRgtrId = tRegVo.getLastRgtrId();
+		this.lastRegDt = tRegVo.getLastRegDt();
+	}
+
+}
+
+
+
+//====== 템플릿 목록 ======
+	@Override
+	public ResponseEntity<CommonResponse<List<TemplateListDto>>> templatesList(
+			int page, int size, String srvyTrprSeCd, String tmpltTtl) {
+
+		int currentPage = (page < 1) ? 1 : page;
+		int pageSize = (size < 1) ? 5 : size;
+		int offset = (currentPage - 1) * pageSize;
+
+		TemplateListVo vo = new TemplateListVo();
+		vo.setSrvyTrprSeCd(srvyTrprSeCd);
+		vo.setTmpltTtl(tmpltTtl);
+
+		List<TemplateListVo> list = surveyTemplateDao.templatesList(offset, pageSize, vo);
+		int total = (list == null || list.isEmpty()) ? 0 : list.get(0).getTotalCount(); // COUNT(*) OVER()
+
+		List<TemplateListDto> dtoList = (list == null ? java.util.Collections.<TemplateListVo>emptyList() : list)
+				.stream()
+				.map(v -> new TemplateListDto(
+						v.getTmpltUnqNo(), v.getSysSeCd(), v.getSrvyTrprSeCd(),
+						v.getTypeSeUnqNo(), v.getTmpltTtl(), v.getTmpltExpln(),
+						v.getFrstRgtrId(), v.getFrstRegDt(),
+						//v.getTmpltPathNm(),
+						v.getLastRgtrId(), v.getLastRegDt()))
+				.toList();
+
+		PageMeta meta = PageUtils.buildMeta(currentPage, pageSize, total);
+		return CommonResponse.respondPaged(HttpCode.OK, dtoList, meta, "템플릿 목록 조회 성공");
+
+	}
+
+
+ResponseEntity<CommonResponse<java.util.List<TemplateListDto>>>
+		templatesList(int page, int size, String srvyTrprSeCd, String tmpltTtl);
+
+/**
+	 * Find all samples list.
+	 *
+	 * @return the list
+	 */
+	public List<TemplateListVo> templatesList(int offset, int size, TemplateListVo templateListVo) {
+		// ⚠️ Map.of(...) 는 값에 null이 하나라도 있으면 NPE 발생
+		// → null-safe 하게 HashMap으로 구성
+		Map<String, Object> params = new HashMap<>();
+		params.put("offset", offset);
+		params.put("size", size);
+
+		if (templateListVo != null) {
+			String srvyTrprSeCd = templateListVo.getSrvyTrprSeCd();
+			String tmpltTtl = templateListVo.getTmpltTtl();
+
+			if (srvyTrprSeCd != null && !srvyTrprSeCd.isEmpty()) {
+				params.put("srvyTrprSeCd", srvyTrprSeCd);
+			}
+			if (tmpltTtl != null && !tmpltTtl.isEmpty()) {
+				params.put("tmpltTtl", tmpltTtl);
+			}
+		}
+
+		return selectList(templateSpace + "FindAllTemplate", params);
+	}
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="template.biz">
+
+	<!-- 
+	 <select id="templatesSave"
+		parameterType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateRegVo"
+		resultType="string">
+		INSERT INTO ass_tmplt_b (
+			tmplt_unq_no, sys_se_cd, srvy_trpr_se_cd, type_se_unq_no, tmplt_ttl,
+			tmplt_img_cn, tmplt_expln, frst_rgtr_id, last_rgtr_id,			
+			use_yn, frst_reg_dt, last_reg_dt
+		)
+		VALUES (
+			(
+				SELECT 'T' || to_char(current_date, 'YYYYMM') ||
+					LPAD(
+						(
+							COALESCE(
+								MAX(
+									CAST(
+										NULLIF(
+											REGEXP_REPLACE(SUBSTRING(tmplt_unq_no, 8, 7), '[^0-9]', '', 'g')
+										, '') AS BIGINT
+									)
+								), 0
+							) + 1
+						)::text,
+						7, '0'
+					)
+				FROM ass_tmplt_b
+				WHERE SUBSTRING(tmplt_unq_no, 1, 7) = 'T' || to_char(current_date, 'YYYYMM')
+			),
+			#{sysSeCd}, #{srvyTrprSeCd},
+			(
+				SELECT 'C' || to_char(current_date, 'YYYYMM') ||
+					LPAD(
+						(
+							COALESCE(
+								MAX(
+									CAST(
+										NULLIF(
+											REGEXP_REPLACE(SUBSTRING(type_se_unq_no, 8, 7), '[^0-9]', '', 'g')
+										, '') AS BIGINT
+									)
+								), 0
+							) + 1
+						)::text,
+						7, '0'
+					)
+				FROM ass_tmplt_b
+				WHERE SUBSTRING(type_se_unq_no, 1, 7) = 'C' || to_char(current_date, 'YYYYMM')
+			),
+			#{tmpltTtl},
+			#{tmpltImgCn,jdbcType=BINARY}, #{tmpltExpln},			
+			#{frstRgtrId}, #{lastRgtrId},
+			'Y', NOW(), NOW()
+		)
+		ON CONFLICT (tmplt_unq_no, sys_se_cd) DO NOTHING
+		RETURNING tmplt_unq_no
+	</select>
+	 -->
+	
+	<!-- 
+	<select id="templatesSave"
+		parameterType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateRegVo"
+		resultType="string">
+		INSERT INTO ass_tmplt_b (
+			tmplt_unq_no, sys_se_cd, srvy_trpr_se_cd, type_se_unq_no, tmplt_ttl,
+			tmplt_img_cn, tmplt_expln, frst_rgtr_id, last_rgtr_id,
+			use_yn, frst_reg_dt, last_reg_dt
+		)
+		VALUES (
+			#{tmpltUnqNo},
+			#{sysSeCd}, #{srvyTrprSeCd},
+			#{typeSeUnqNo},
+			#{tmpltTtl},
+			#{tmpltImgCn,jdbcType=BINARY}, #{tmpltExpln},
+			#{frstRgtrId}, #{lastRgtrId},
+			'Y', NOW(), NOW()
+		)
+		RETURNING tmplt_unq_no
+	</select>	
+	 -->
+	 
+	 
+	<!-- 템플릿 저장: 중복 시 예외 발생(서비스가 캐치해서 사용자 메시지 변환) -->
+	<select id="templatesSave"
+		parameterType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateRegVo"
+		resultType="string">
+		INSERT INTO ass_tmplt_b (
+			tmplt_unq_no, sys_se_cd, srvy_trpr_se_cd, type_se_unq_no, tmplt_ttl,
+			tmplt_img_cn, tmplt_expln, frst_rgtr_id, last_rgtr_id,
+			use_yn, frst_reg_dt, last_reg_dt
+		)
+		VALUES (
+			#{tmpltUnqNo},
+			#{sysSeCd}, #{srvyTrprSeCd},
+			#{typeSeUnqNo},
+			#{tmpltTtl},
+			#{tmpltImgCn,jdbcType=BINARY}, #{tmpltExpln},
+			#{frstRgtrId}, #{lastRgtrId},
+			'Y', NOW(), NOW()
+		)
+		RETURNING tmplt_unq_no
+	</select>
+	 
+	
+	<select id="selectNextTmpltUnqNo" resultType="String">
+		SELECT
+			'T' || TO_CHAR(CURRENT_DATE, 'YYYYMM') ||
+			LPAD((COALESCE(MAX(SUBSTRING(tmplt_unq_no, 8, 7)::INT), 0) + 1)::TEXT, 7, '0') AS next_id
+		FROM public.ass_tmplt_b
+		WHERE (tmplt_unq_no)::TEXT ~ ('^T' || TO_CHAR(CURRENT_DATE, 'YYYYMM') || '[0-9]{7}$')
+	</select>
+	
+	
+	<select id="selectNextTypeSeUnqNo" resultType="String">
+		SELECT
+			'C' || TO_CHAR(CURRENT_DATE, 'YYYYMM') ||
+			LPAD((COALESCE(MAX(SUBSTRING(type_se_unq_no, 8, 7)::INT), 0) + 1)::TEXT, 7, '0') AS next_id
+		FROM public.ass_tmplt_b
+		WHERE (type_se_unq_no)::TEXT ~ ('^C' || TO_CHAR(CURRENT_DATE, 'YYYYMM') || '[0-9]{7}$')
+	</select>
+		
+
+	
+	<update id="templatesMod"
+		parameterType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateEditVo">
+		UPDATE ass_tmplt_b
+		SET srvy_trpr_se_cd = #{srvyTrprSeCd},
+		type_se_unq_no = #{typeSeUnqNo},
+		tmplt_ttl = #{tmpltTtl},
+		tmplt_img_cn = #{tmpltImgCn},
+		tmplt_expln = #{tmpltExpln},
+		<!-- tmplt_path_nm = #{tmpltPathNm}, -->
+		last_rgtr_id = #{lastRgtrId},
+		last_reg_dt = NOW()
+		WHERE tmplt_unq_no = #{tmpltUnqNo}
+	</update>
+	
+	<update id="deleteSurveyTemplates" parameterType="string">
+	    UPDATE ass_tmplt_b
+	    SET use_yn = 'N',
+	        last_reg_dt = now()
+	    WHERE tmplt_unq_no = #{value}
+	</update>
+
+	<select id="FindAllTemplate"
+	        parameterType="map"
+	        resultType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateListVo">
+	    SELECT
+	        tmplt_unq_no,
+	        sys_se_cd,
+	        srvy_trpr_se_cd,
+	        type_se_unq_no,
+	        tmplt_ttl,
+	        tmplt_expln,
+	        tmplt_path_nm,
+	        frst_rgtr_id,
+	        frst_reg_dt,
+	        last_rgtr_id,
+	        last_reg_dt,
+	        COUNT(*) OVER() AS totalCount
+	    FROM ass_tmplt_b
+	    <where>
+	        use_yn = 'Y'
+	        <if test="srvyTrprSeCd != null and srvyTrprSeCd != ''">
+	            AND srvy_trpr_se_cd = #{srvyTrprSeCd}
+	        </if>
+	        <if test="tmpltTtl != null and tmpltTtl != ''">
+	            AND tmplt_ttl LIKE CONCAT('%', #{tmpltTtl}, '%')
+	        </if>
+	    </where>
+	    ORDER BY frst_reg_dt DESC
+	    LIMIT #{size} OFFSET #{offset}
+	</select>
+	
+	<!-- ROLE_ADMIN 권한이 아닌경우 해당 데이터가 로그인한 계정으로 등록된 데이터만 볼 수 있도록 확인. -->
+	<select id="TemplateCheckById"
+		parameterType="map"
+		resultType="boolean">
+		SELECT EXISTS (
+			SELECT 1
+			FROM ass_tmplt_b
+			WHERE tmplt_unq_no = #{tmpltUnqNo}
+				AND frst_rgtr_id = #{lgnId}
+				AND use_yn = 'Y'
+		)
+	</select>
+
+	
+	<select id="TemplateById" parameterType="string"
+        resultType="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.TemplateVo">
+	    SELECT
+	        tmplt_unq_no, sys_se_cd, srvy_trpr_se_cd, type_se_unq_no, tmplt_ttl, tmplt_img_cn, tmplt_expln,
+	        tmplt_path_nm, tmplt_path_nm, frst_rgtr_id, frst_reg_dt, last_rgtr_id, last_reg_dt
+	    FROM
+	        ass_tmplt_b
+	    WHERE
+	        tmplt_unq_no = #{value}
+	    AND use_yn = 'Y'
+	</select>
+	
+	
+	<!-- 대상구분에 따른 템플릿 기본정보 매핑 -->
+	<resultMap id="SurveyTemplateMap" type="kr.re.kice.adnp.cm.survey.dao.vo.surveytemplate.SurveyTemplateVo">
+		<result property="tmpltUnqNo"		column="tmplt_unq_no"/>
+		<result property="sysSeCd"			column="sys_se_cd"/>
+		<result property="srvyTrprSeCd"		column="srvy_trpr_se_cd"/>
+		<result property="typeSeUnqNo"		column="type_se_unq_no"/>
+		<result property="tmpltTtl"			column="tmplt_ttl"/>
+	</resultMap>
+	
+	<!-- 5-1) 특정 대상자구분 코드로 템플릿 조회 -->
+	<select id="FindTemplatesByTargetSe"
+		parameterType="string"
+		resultMap="SurveyTemplateMap">
+		SELECT
+			t.tmplt_unq_no,
+			t.sys_se_cd,
+			TRIM(t.srvy_trpr_se_cd) AS srvy_trpr_se_cd,
+			t.type_se_unq_no,
+			t.tmplt_ttl
+		FROM ass_tmplt_b t
+		WHERE TRIM(t.srvy_trpr_se_cd) = TRIM(#{srvyTrprSeCd})
+		  AND t.use_yn = 'Y'
+		ORDER BY t.tmplt_unq_no
+	</select>
+	
+	<!-- 5-2) 공통코드의 유효 대상자구분 전체에 대해 템플릿 조회 -->
+	<select id="FindTemplatesByAllValidTargets"
+		resultMap="SurveyTemplateMap">
+		SELECT
+			t.tmplt_unq_no,
+			t.sys_se_cd,
+			TRIM(t.srvy_trpr_se_cd) AS srvy_trpr_se_cd,
+			t.type_se_unq_no,
+			t.tmplt_ttl
+		FROM ass_tmplt_b t
+		JOIN a_ccc_com_cd_vld_vl_d c
+		  ON TRIM(t.srvy_trpr_se_cd) = TRIM(c.cd_vld_vl)
+		 AND c.cd_eng_nm = 'SRVY_TRPR_SE_CD'
+		 AND c.use_yn = 'Y'
+		WHERE t.use_yn = 'Y'
+		ORDER BY t.srvy_trpr_se_cd, t.tmplt_unq_no
+	</select>
+	
+	
+</mapper>  위와 같은 구조의 소스코드 형식처럼 Mapper로 되어있고 신규로 컨트롤러, 서비스, DAO, DTO ,VO, Mapper를 위 구조와 공통된 응답 형식으로 기존 테이블 2개의 데이터를 조인하여 하나의 테이블로 옮기는 과정을 스프링 배치로 특정시간에 동작하고 기존 테이블에서는 데이터를 지우려고해 예시를 전부 다시 알려줘
+```````
