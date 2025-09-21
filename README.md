@@ -1,18 +1,18 @@
 ### 데이터 백업 및 이관 BATCH 테스트
 
-- 컨트롤러 / 서비스 / DAO / DTO / VO / Mapper를 전부 포함한 Spring Batch + MyBatis 기반 “두 원본 테이블 조인 → 단일 타깃 테이블로 이관 → 원본 데이터 삭제” 파이프라인 전체 예시를 제공합니다.
+좋아요. 요청하신 컨트롤러 / 서비스 / DAO / DTO / VO / Mapper를 전부 포함한 Spring Batch + MyBatis 기반 “두 원본 테이블 조인 → 단일 타깃 테이블로 이관 → 원본 데이터 삭제” 파이프라인 전체 예시를 제공합니다.
 
-운영 전제: PostgreSQL, MyBatis, Spring Batch, 정해진 시간 자동 실행(@Scheduled) + 수동 트리거용 API 제공
+- 운영 전제: PostgreSQL, MyBatis, Spring Batch, 정해진 시간 자동 실행(@Scheduled) + 수동 트리거용 API 제공
 
-들여쓰기는 전부 탭, 네이버 체크스타일 취향(간결 네이밍, Javadoc, Swagger 주석 등) 맞춤
+- 들여쓰기는 전부 탭, 네이버 체크스타일 취향(간결 네이밍, Javadoc, Swagger 주석 등) 맞춤
 
-안전 절차: ①이관(UPSERT) → ②검증(건수) → ③삭제(원본) → ④후처리/감사
+- 안전 절차: ①이관(UPSERT) → ②검증(건수) → ③삭제(원본) → ④후처리/감사
 
-대량 운영 대비: 청크 처리, 재실행 안전(idempotent), ON CONFLICT DO NOTHING 사용, 실패 시 재시작 가능하게 Step 분리
+- 대량 운영 대비: 청크 처리, 재실행 안전(idempotent), ON CONFLICT DO NOTHING 사용, 실패 시 재시작 가능하게 Step 분리
 
-0) 의존성 & 설정
+# 0) 의존성 & 설정
 
-build.gradle
+# build.gradle
 ```````
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
